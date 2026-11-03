@@ -12,10 +12,11 @@ import time
 import uuid
 from datetime import datetime, timedelta
 
-from scripts.fb_config import COMMENTS_DOC_ID, POST_DOC_ID, REPLY_DOC_ID
+from scripts.fb_config import COMMENTS_DOC_ID, GROUP_POST_DOC_ID, POST_DOC_ID, REPLY_DOC_ID
 from scripts.fb_session import (
     COMMENTS_RELAY_PV_FLAGS,
     CONTENT_DATE_RANGES,
+    GROUP_POST_RELAY_PV_FLAGS,
     POST_RELAY_PV_FLAGS,
     REPLY_RELAY_PV_FLAGS,
     create_session,
@@ -285,8 +286,97 @@ def _comment_on_scheduled(session, tokens, actor_id, comment, schedule_at,
     )
 
 
+def _resolve_group_id(session, group: str) -> str:
+    """Numeric group id from an id, a /groups/<id|vanity>/ URL or a /share/g/ link.
+
+    Share links and vanity URLs only reveal the id after a logged-in GET
+    (the share link redirects to /groups/<id>/, a vanity page carries
+    "groupID" in its HTML). Never guess: no single id found = abort.
+    """
+    group = group.strip()
+    if group.isdigit():
+        return group
+    m = re.search(r"facebook\.com/groups/(\d+)", group)
+    if m:
+        return m.group(1)
+    r = session.get(group, allow_redirects=True, timeout=30)
+    m = re.search(r"facebook\.com/groups/(\d+)", r.url)
+    ids = {m.group(1)} if m else set(re.findall(r'"groupID":"(\d+)"', r.text))
+    if len(ids) != 1:
+        print(f"Error: could not resolve a single group id from {group!r} "
+              f"(found {sorted(ids) or 'none'}).", file=sys.stderr)
+        sys.exit(1)
+    return ids.pop()
+
+
+def _group_variables(text, actor_id, group_id, attachments) -> dict:
+    """ComposerStoryCreateMutation variables as the group composer sends them.
+
+    Captured 2026-10-24 (submit aborted, nothing posted). Versus the timeline
+    payload: the audience is the group (`to_id`) instead of a privacy row,
+    composer_type/surface = group, and the render flags say GROUP. There is no
+    scheduling here: Facebook only lets group admins schedule.
+    """
+    session_id = str(uuid.uuid4())
+    return {
+        "input": {
+            "composer_entry_point": "inline_composer",
+            "composer_source_surface": "group",
+            "composer_type": "group",
+            "logging": {"composer_session_id": session_id},
+            "source": "WWW",
+            "message": {"ranges": [], "text": text},
+            "with_tags_ids": None,
+            "inline_activities": [],
+            "text_format_preset_id": "0",
+            "group_flair": {"flair_id": None},
+            "attachments": attachments,
+            "navigation_data": {
+                "attribution_id_v2": f"CometGroupDiscussionRoot.react,comet.group,via_cold_start,{int(time.time() * 1000)},103663,2361831622,,"
+            },
+            "tracking": [None],
+            "event_share_metadata": {"surface": "newsfeed"},
+            "audience": {"to_id": group_id},
+            "actor_id": actor_id,
+            "client_mutation_id": "1",
+        },
+        "feedLocation": "GROUP",
+        "feedbackSource": 0,
+        "focusCommentID": None,
+        "gridMediaWidth": None,
+        "groupID": None,
+        "scale": 2,
+        "privacySelectorRenderLocation": "COMET_STREAM",
+        "checkPhotosToReelsUpsellEligibility": False,
+        "referringStoryRenderLocation": None,
+        "renderLocation": "group",
+        "useDefaultActor": False,
+        "inviteShortLinkKey": None,
+        "isFeed": False,
+        "isFundraiser": False,
+        "isFunFactPost": False,
+        "isGroup": True,
+        "isEvent": False,
+        "isTimeline": False,
+        "isSocialLearning": False,
+        "isPageNewsFeed": False,
+        "isProfileReviews": False,
+        "isWorkSharedDraft": False,
+        "hashtag": None,
+        "canUserManageOffers": None,
+        **GROUP_POST_RELAY_PV_FLAGS,
+    }
+
+
 def cmd_post(args):
     """Post text to Facebook."""
+    if args.group and (args.schedule or args.composer):
+        print(
+            "Error: --group posts immediately via GraphQL. Facebook lets only "
+            "group admins schedule, and the composer fallback is timeline-only.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     if args.image and args.composer:
         # Opt-in fallback: drive the real composer UI. Kept for the case where
         # the upload endpoint changes and the API path stops working; the
@@ -340,8 +430,14 @@ def cmd_post(args):
 
     # SUBSCRIBERS (and any other list-backed audience) is not a base_state —
     # it needs this account's own list id, looked up before we post.
-    privacy_row = resolve_privacy_row(session, tokens, actor_id, args.privacy)
-    if args.privacy not in PLAIN_PRIVACY_STATES:
+    group_id = _resolve_group_id(session, args.group) if args.group else None
+    if group_id:
+        # The group's own privacy decides who sees it; --privacy does not apply.
+        print(f"  group: {group_id}")
+        privacy_row = None
+    else:
+        privacy_row = resolve_privacy_row(session, tokens, actor_id, args.privacy)
+    if not group_id and args.privacy not in PLAIN_PRIVACY_STATES:
         print(f"  audience: {args.privacy} -> {json.dumps(privacy_row)}")
 
     # A photo is uploaded first and referenced by id — same two-step the
@@ -407,7 +503,12 @@ def cmd_post(args):
         **POST_RELAY_PV_FLAGS,
     }
 
-    if schedule_epoch:
+    doc_id = POST_DOC_ID
+    if group_id:
+        variables = _group_variables(args.text, actor_id, group_id, attachments)
+        doc_id = GROUP_POST_DOC_ID
+        print(f"\nPosting to group {group_id}...")
+    elif schedule_epoch:
         variables["input"]["unpublished_content_data"] = {
             "scheduled_publish_time": schedule_epoch,
             "unpublished_content_type": "SCHEDULED",
@@ -417,7 +518,7 @@ def cmd_post(args):
         print(f"\nPosting to Facebook (privacy: {args.privacy})...")
 
     data = graphql_request(
-        session, tokens, actor_id, POST_DOC_ID,
+        session, tokens, actor_id, doc_id,
         "ComposerStoryCreateMutation", variables,
     )
 
@@ -457,7 +558,7 @@ def cmd_post(args):
     # A list-backed audience is the one case where "the mutation succeeded"
     # is not enough: if the allow list were dropped, base_state SELF would
     # quietly make a subscriber post visible to nobody but the author.
-    if args.privacy not in PLAIN_PRIVACY_STATES:
+    if not group_id and args.privacy not in PLAIN_PRIVACY_STATES:
         story_id = story_create.get("story_id") or (story or {}).get("id")
         stored = fetch_story_privacy(session, tokens, actor_id, story_id) if story_id else None
         if stored is None:
@@ -1427,6 +1528,12 @@ def main():
         help="After posting/scheduling, pre-write this as a top-level comment "
         "on the new post (e.g. the article URL). Works with --image too, since "
         "photos now go through the GraphQL path.",
+    )
+    post_parser.add_argument(
+        "--group", metavar="ID_OR_URL",
+        help="Post into a group instead of your profile: numeric id, "
+             "/groups/<id|vanity>/ URL or a /share/g/ link. Posts immediately "
+             "(only group admins can schedule); --privacy is ignored.",
     )
     post_parser.add_argument(
         "--composer", action="store_true",

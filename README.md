@@ -173,6 +173,19 @@ Or comment on any of your own posts later (numeric post_id printed by
 uv run fb comment 1234567890123456 "https://example.com/article"
 ```
 
+Post into a group you belong to — numeric id, `/groups/<id|vanity>/` URL, or
+the `/share/g/…` link the app gives you:
+
+```bash
+uv run fb post "Post text" --group https://www.facebook.com/share/g/XXXXXXXX/ \
+  --image cover.png
+```
+
+Group posts go out immediately: Facebook only lets group admins schedule, so
+`--schedule` is refused with `--group`, and `--privacy` does not apply (the
+group's own privacy does). A group that reviews member posts holds yours until
+an admin approves it.
+
 ### Your posts — List / Comment / Delete
 
 Your own posts live in the Professional Dashboard's Content Library (**已發佈**

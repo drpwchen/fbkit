@@ -60,6 +60,12 @@ sandbox.
   `code 1446013` ("post removed") because Facebook has not indexed it yet.
   `_create_comment()` waits 5 s and retries 3× — keep it on both the immediate
   and scheduled paths.
+- **Group posts** (`fb post --group`): same ComposerStoryCreateMutation on its
+  own doc id + relay flags (`GROUP_POST_DOC_ID`, `GROUP_POST_RELAY_PV_FLAGS`,
+  captured 2026-10-24 by aborting the composer's submit — every POST blocked
+  once armed, so nothing was posted). Audience = `{"to_id": <group id>}`. No
+  scheduling: Facebook gives that to group admins only. Cannot be rehearsed as
+  SELF; first real group post confirmed working by the maintainer (2026-11).
 - **Scheduling window ≈ 30 days**; the CLI fails before submit when out of
   range. Minimum lead time 10 minutes.
 - **Insights are SSR-preloaded**, not XHR: the doc ids came from

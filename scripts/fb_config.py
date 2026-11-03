@@ -8,6 +8,11 @@ new frontend code. Update values here when requests start returning errors.
 # ComposerStoryCreateMutation — create a new post on timeline
 POST_DOC_ID = "26937332182536553"
 
+# ComposerStoryCreateMutation as the group composer sends it (captured
+# 2026-10-24 with the submit aborted). Same mutation, newer build; the group
+# path stays on the doc id it was captured with.
+GROUP_POST_DOC_ID = "28558484830517307"
+
 # ProdashCometCommentsManagerCommentsListPaginationQuery — list comments from Professional Dashboard
 COMMENTS_DOC_ID = "27195336053390016"
 

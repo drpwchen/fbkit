@@ -5,6 +5,16 @@ Originally forked from [htlin222/fbpost](https://github.com/htlin222/fbpost);
 maintained standalone since 2026-07-30 (upstream inactive since March 2026,
 PRs #1/#2 closed unmerged). MIT license and original copyright retained.
 
+## [0.12.0] - 2026-11-03
+
+### Added
+
+- **`fb post --group <group>`** posts into a group you belong to. `<group>` is a numeric id,
+  a `/groups/<id|vanity>/` URL, or the `/share/g/…` link the app gives you. `--image` works.
+  Group posts go out immediately: Facebook only lets group admins schedule, so `--schedule`
+  is refused with `--group`, and `--privacy` does not apply (the group's own privacy does).
+  A group that reviews member posts holds yours until an admin approves it.
+
 ## [0.11.1] - 2026-09-29
 
 ### Fixed

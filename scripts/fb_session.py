@@ -54,6 +54,42 @@ POST_RELAY_PV_FLAGS = {
     "__relay_internal__pv__GHLShouldUseSponsoredAuctionLabelFieldNameV2relayprovider": False,
 }
 
+# Relay provider flags the group composer sent with GROUP_POST_DOC_ID
+# (captured 2026-10-24). They belong to that doc id; refresh both together.
+GROUP_POST_RELAY_PV_FLAGS = {
+    "__relay_internal__pv__CometUFIShareActionMigrationrelayprovider": True,
+    "__relay_internal__pv__GHLShouldChangeSponsoredDataFieldNamerelayprovider": True,
+    "__relay_internal__pv__GHLShouldChangeAdIdFieldNamerelayprovider": True,
+    "__relay_internal__pv__CometUFI_dedicated_comment_routable_dialog_gkrelayprovider": True,
+    "__relay_internal__pv__CometUFICommentAutoTranslationTyperelayprovider": 'AUTO_TRANSLATE',
+    "__relay_internal__pv__CometUFICommentAvatarStickerAnimatedImagerelayprovider": False,
+    "__relay_internal__pv__CometUFICommentActionLinksRewriteEnabledrelayprovider": True,
+    "__relay_internal__pv__IsWorkUserrelayprovider": False,
+    "__relay_internal__pv__CometUFIReactionsEnableShortNamerelayprovider": False,
+    "__relay_internal__pv__CometUFISingleLineUFIrelayprovider": True,
+    "__relay_internal__pv__CometFeedStory_enable_reactor_facepilerelayprovider": False,
+    "__relay_internal__pv__CometFeedStory_enable_social_bubblesrelayprovider": False,
+    "__relay_internal__pv__CometFeedStory_enable_post_permalink_white_space_clickrelayprovider": False,
+    "__relay_internal__pv__TestPilotShouldIncludeDemoAdUseCaserelayprovider": False,
+    "__relay_internal__pv__FBReels_deprecate_short_form_video_context_gkrelayprovider": True,
+    "__relay_internal__pv__FBReels_enable_view_dubbed_audio_type_gkrelayprovider": True,
+    "__relay_internal__pv__CometFeedShareMedia_shouldPrefetchShareImagerelayprovider": True,
+    "__relay_internal__pv__CometImmersivePhotoCanUserDisable3DMotionrelayprovider": False,
+    "__relay_internal__pv__WorkCometIsEmployeeGKProviderrelayprovider": False,
+    "__relay_internal__pv__IsMergQAPollsrelayprovider": False,
+    "__relay_internal__pv__FBReelsMediaFooter_comet_enable_reels_ads_gkrelayprovider": True,
+    "__relay_internal__pv__relay_provider_comet_ufi_ssr_seo_deferrelayprovider": True,
+    "__relay_internal__pv__FBReelsIFUTileContent_reelsIFUPlayOnHoverrelayprovider": True,
+    "__relay_internal__pv__GroupsCometGYSJFeedItemHeightrelayprovider": 206,
+    "__relay_internal__pv__StoriesShouldEnablePhotosensitiveContentWarningrelayprovider": False,
+    "__relay_internal__pv__ShouldEnableBakedInTextStoriesrelayprovider": False,
+    "__relay_internal__pv__StoriesShouldIncludeFbNotesrelayprovider": True,
+    "__relay_internal__pv__groups_comet_use_glvrelayprovider": False,
+    "__relay_internal__pv__GHLShouldChangeSponsoredAuctionDistanceFieldNamerelayprovider": True,
+    "__relay_internal__pv__GHLShouldUseSponsoredAuctionLabelFieldNameV1relayprovider": True,
+    "__relay_internal__pv__GHLShouldUseSponsoredAuctionLabelFieldNameV2relayprovider": False,
+}
+
 # Relay PV flags for comments listing
 COMMENTS_RELAY_PV_FLAGS = {
     "__relay_internal__pv__CometUFI_dedicated_comment_routable_dialog_gkrelayprovider": False,
