@@ -56,6 +56,20 @@ sandbox.
   `upload_photo()` pops and restores it; any new non-form request must do the
   same. Symptom pattern: `--privacy SELF` works, `SUBSCRIBERS` fails (the
   allow-list resolution is a GraphQL call before the upload).
+- **Comment target = the post's feedback id, read from its story.** Since
+  2026-11 (between 10-31 and 11-13) Facebook rejects the old
+  `feedback:<post_id>` (`Invalid value … feedback_id`); the post's
+  `CometFocusedStoryViewStoryQuery` reports `.data.node.feedback.id` =
+  `feedback:pfbid…` — even for posts once commented on with the old form.
+  `_create_comment()` resolves: explicit feedback id → pfbid/base64 given as
+  the target → story (re-read every attempt, a fresh post is not readable at
+  once) → legacy fallback with a warning. Read only that fixed path: the same
+  response carries each *comment's* feedback (another pfbid), and
+  `feedback:<post>_<comment>` must never be a target (it makes a reply).
+  Every caller must pass the story id (post: `story_create.story_id`;
+  scheduled: Content Library `row["story_id"]`; `fb comment <post_id>`:
+  `_story_id_for_post()`). Tests: `uv run python -m unittest discover -s
+  tests -t .`.
 - **Comment timing**: commenting right after creating a post returns
   `code 1446013` ("post removed") because Facebook has not indexed it yet.
   `_create_comment()` waits 5 s and retries 3× — keep it on both the immediate

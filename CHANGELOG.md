@@ -5,6 +5,25 @@ Originally forked from [htlin222/fbpost](https://github.com/htlin222/fbpost);
 maintained standalone since 2026-07-30 (upstream inactive since March 2026,
 PRs #1/#2 closed unmerged). MIT license and original copyright retained.
 
+## [0.12.1] - 2026-11-13
+
+### Fixed
+
+- **Comments failed with `Invalid value … feedback_id`.** Facebook stopped
+  accepting the feedback id fbkit built from the post id (`feedback:<post_id>`);
+  a post's own feedback is now `feedback:pfbid…`. `fb post --comment` (immediate
+  and scheduled), `fb comment-scheduled` and `fb comment` now read the post's
+  story first and comment on the feedback id Facebook reports there. The old
+  form is only a fallback when the story cannot be read, with a warning.
+
+### Added
+
+- `fb comment` also takes a post's `pfbid…` (from its URL) or its base64
+  feedback id (`ZmVlZGJhY2s6…`). A comment's feedback id is refused, so a
+  top-level comment can never land as a reply.
+- First test suite (`tests/`, stdlib unittest, no network):
+  `uv run python -m unittest discover -s tests -t .`.
+
 ## [0.12.0] - 2026-11-03
 
 ### Added

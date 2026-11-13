@@ -28,6 +28,8 @@ from scripts.fb_session import (
     fetch_page_id,
     fetch_story_text,
     fetch_story_privacy,
+    decode_post_feedback_id,
+    fetch_story_feedback_id,
     resolve_privacy_row,
     upload_photo,
     PLAIN_PRIVACY_STATES,
@@ -87,14 +89,42 @@ def _resolve_post_id(raw: str) -> str:
     sys.exit(1)
 
 
-def _try_comment(session, tokens, actor_id, post_id: str, text: str):
-    """Create a TOP-LEVEL comment on one of our own posts via GraphQL.
+def _legacy_feedback_id(post_id: str) -> str:
+    """The pre-2026-11 feedback id, built from the post id itself.
 
-    Works on scheduled (unpublished) posts too — feedback:<post_id> resolves
-    before publish, which is what lets us pre-write the URL comment the user
-    parks under each post. Returns (ok, data); ok is True only when Facebook
-    hands back the created comment edge (no blind success)."""
-    feedback_id = base64.b64encode(f"feedback:{post_id}".encode()).decode()
+    Facebook stopped accepting it (Invalid value … feedback_id) somewhere
+    between 2026-10-31 and 11-13; it is only the fallback when the post's
+    story cannot be read."""
+    return base64.b64encode(f"feedback:{post_id}".encode()).decode()
+
+
+def _as_feedback_id(raw: str) -> str:
+    """A post-level base64 feedback id from what a user may pass, else "".
+
+    - base64 `feedback:pfbid…` / `feedback:<digits>` → returned verbatim
+    - `pfbid…` (e.g. from a post URL) → base64 of `feedback:pfbid…`
+    - digits → the legacy `feedback:<post_id>`
+    A comment's feedback (`feedback:<post>_<comment>`) is refused: it would
+    turn the top-level comment into a reply.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    if raw.isdigit():
+        return _legacy_feedback_id(raw)
+    if re.fullmatch(r"pfbid[0-9A-Za-z]+", raw):
+        return base64.b64encode(f"feedback:{raw}".encode()).decode()
+    return raw if decode_post_feedback_id(raw) else ""
+
+
+def _try_comment(session, tokens, actor_id, feedback_id: str, text: str):
+    """Create a TOP-LEVEL comment on the post whose feedback object is
+    `feedback_id` (base64, used verbatim — resolve it with _create_comment).
+
+    Works on scheduled (unpublished) posts too, which is what lets us pre-write
+    the URL comment the user parks under each post. Returns (ok, data); ok is
+    True only when Facebook hands back the created comment edge (no blind
+    success)."""
     session_id = str(uuid.uuid4())
     variables = {
         "feedLocation": "DEDICATED_COMMENTING_SURFACE",
@@ -150,8 +180,18 @@ def _report_comment_failure(data):
 
 
 def _create_comment(session, tokens, actor_id, post_id: str, text: str,
-                    attempts=3, delay=5, initial_delay=0, fail_hint=""):
+                    attempts=3, delay=5, initial_delay=0, fail_hint="",
+                    story_id="", feedback_id=""):
     """Comment on one of our own posts, exiting non-zero if it did not land.
+
+    Which feedback object the comment goes to, in order:
+      1. `feedback_id` if given (base64, verbatim);
+      2. `post_id` itself when it is already a pfbid or a base64 feedback id;
+      3. the post's story (`story_id`) → `.data.node.feedback.id` — since
+         2026-11 that is `feedback:pfbid…`, and Facebook rejects the old
+         `feedback:<post_id>`. Re-read on every attempt until it answers,
+         because a just-created post is not readable at once either;
+      4. only if the story cannot be read: the legacy `feedback:<post_id>`.
 
     Retries because Facebook needs a moment to index a *just-created* post:
     comment too soon and the mutation answers 1446013「貼文已移除」even though
@@ -163,13 +203,41 @@ def _create_comment(session, tokens, actor_id, post_id: str, text: str,
     `fail_hint` is the recovery line printed when every attempt failed. The
     post itself already exists by then, so callers must never re-post.
     """
+    post_id = str(post_id)
+    resolved = feedback_id or ("" if post_id.isdigit() else _as_feedback_id(post_id))
+    if not resolved and not post_id.isdigit():
+        print(
+            f"Error: {post_id!r} is neither a post id nor a post feedback id — "
+            "no comment was posted.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if resolved:
+        print(f"  feedback: {decode_post_feedback_id(resolved)}")
     data = {}
+    warned = False
     for attempt in range(attempts):
         if attempt:
             time.sleep(delay)
         elif initial_delay:
             time.sleep(initial_delay)
-        ok, data = _try_comment(session, tokens, actor_id, post_id, text)
+        target = resolved
+        if not target and story_id:
+            target = fetch_story_feedback_id(session, tokens, actor_id, story_id) or ""
+            if target:
+                resolved = target
+                print(f"  feedback (from the post's story): {decode_post_feedback_id(target)}")
+        if not target:
+            target = _legacy_feedback_id(post_id)
+            if not warned:
+                why = "its story could not be read" if story_id else "no story id to read"
+                print(
+                    f"  feedback: falling back to feedback:{post_id} ({why}); "
+                    "Facebook may reject this old format.",
+                    file=sys.stderr,
+                )
+                warned = True
+        ok, data = _try_comment(session, tokens, actor_id, target, text)
         if ok:
             print(f"Comment created on post {post_id}: {text}")
             return
@@ -248,6 +316,21 @@ def _find_scheduled_row(session, tokens, actor_id, story_id="", text="", attempt
     return None
 
 
+def _story_id_for_post(session, tokens, actor_id, post_id: str) -> str:
+    """Story id of one of our own posts, looked up in the Content Library
+    (published, then scheduled). "" when it is not in the recent lists — the
+    caller then falls back to the legacy feedback id."""
+    for filtering in ("PUBLISHED", "SCHEDULED"):
+        try:
+            rows = fetch_content_library(session, tokens, actor_id, filtering, limit=40)
+        except SystemExit:
+            continue
+        for row in rows:
+            if row.get("post_id") == post_id and row.get("story_id"):
+                return row["story_id"]
+    return ""
+
+
 def _comment_on_scheduled(session, tokens, actor_id, comment, schedule_at,
                           story_id="", text="", attempts=3):
     """Attach --comment to a post that is scheduled, not published.
@@ -278,6 +361,7 @@ def _comment_on_scheduled(session, tokens, actor_id, comment, schedule_at,
     _warn_if_schedule_drifted_epoch(row["scheduled"], schedule_at)
     _create_comment(
         session, tokens, actor_id, post_id, comment, attempts=attempts,
+        story_id=row.get("story_id") or "",
         fail_hint=(
             "The post itself IS scheduled — only the comment failed. Retry with "
             "'fb post-list-scheduled' then "
@@ -591,6 +675,7 @@ def cmd_post(args):
             _create_comment(
                 session, tokens, actor_id, str(post_id), args.comment,
                 initial_delay=5,
+                story_id=story_create.get("story_id") or (story or {}).get("id") or "",
                 fail_hint=(
                     f"The post itself IS published (post_id {post_id}) — only "
                     f"the comment failed. Do NOT re-post; retry with "
@@ -815,7 +900,7 @@ def cmd_comment_scheduled(args):
     goes through the browser composer, which prints no post_id, so there was
     nothing to attach the URL comment to. The Content Library's post preview
     knows the id — resolve it there, then comment over the normal GraphQL path
-    (feedback:<post_id> resolves before publish)."""
+    (the post's story yields its feedback id even before publish)."""
     if args.browser:
         from scripts.fb_browser import resolve_scheduled_post_id
         info = asyncio.run(resolve_scheduled_post_id(
@@ -832,15 +917,17 @@ def cmd_comment_scheduled(args):
             sys.exit(1)
         post_id, when, text = info["post_id"], info["when"], info["text"]
         session, tokens, actor_id = _content_session(args.profile)
+        story_id = _story_id_for_post(session, tokens, actor_id, post_id)
     else:
         session, tokens, actor_id, rows = _fetch_rows(args, "SCHEDULED", 40)
         row = _pick_row(rows, args.index, args.match, "scheduled post")
         post_id = row["post_id"]
+        story_id = row["story_id"]
         when = _fmt_epoch(row["scheduled"]) or row["when_text"]
         text = " ".join(row["text"].split())[:60]
     print(f"Target [{args.index}] {when} — {text}")
     print(f"  post_id: {post_id}")
-    _create_comment(session, tokens, actor_id, post_id, args.text)
+    _create_comment(session, tokens, actor_id, post_id, args.text, story_id=story_id)
 
 
 def cmd_delete_scheduled(args):
@@ -1300,13 +1387,23 @@ def cmd_comments(args):
 def cmd_comment(args):
     """Create a top-level comment on one of our own posts (works on scheduled
     posts before they publish — the URL-in-comments habit)."""
-    post_id = _resolve_post_id(args.post_id)
+    raw = args.post_id.strip()
+    # pfbid / base64 feedback id: that IS the target, no lookup needed.
+    feedback_id = "" if raw.isdigit() else _as_feedback_id(raw)
+    post_id = raw if feedback_id else _resolve_post_id(raw)
     cookies = load_cookies(args.profile)
     actor_id = cookies["actor_id"]
     session = create_session(cookies)
     print("Fetching tokens from Facebook...")
     tokens = fetch_tokens(session)
-    _create_comment(session, tokens, actor_id, post_id, args.text)
+    story_id = ""
+    if not feedback_id:
+        # A base64 story id was given → read it directly; a bare post id →
+        # find its story in the Content Library first.
+        story_id = raw if not raw.isdigit() else _story_id_for_post(
+            session, tokens, actor_id, post_id)
+    _create_comment(session, tokens, actor_id, post_id, args.text,
+                    story_id=story_id, feedback_id=feedback_id)
 
 
 # ── Reply ────────────────────────────────────────────────────────────────────
@@ -1552,7 +1649,8 @@ def main():
     )
     comment_parser.add_argument(
         "post_id",
-        help="Numeric post_id (printed by 'fb post') or base64 story_id (UzpfS…)",
+        help="Numeric post_id (printed by 'fb post'), base64 story_id (UzpfS…), "
+        "a post's pfbid… (from its URL) or base64 post feedback id (ZmVlZGJhY2s6…)",
     )
     comment_parser.add_argument("text", help="Comment text")
 

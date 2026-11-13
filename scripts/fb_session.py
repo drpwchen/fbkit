@@ -648,6 +648,68 @@ def fetch_story_privacy(session, tokens, actor_id, story_id: str) -> dict | None
     }
 
 
+# ── Post feedback ids (what a top-level comment is attached to) ──────────────
+
+# A post's own feedback object decodes to `feedback:pfbid…` (Facebook's format
+# since 2026-11) or `feedback:<digits>` (the old one, which fbkit used to build
+# from the post_id itself). A *comment's* feedback is `feedback:<post>_<comment>`
+# — the underscore keeps it out, so a URL comment can never land as a reply.
+POST_FEEDBACK_RE = re.compile(r"^feedback:(pfbid[0-9A-Za-z]+|\d+)$")
+
+
+def decode_post_feedback_id(fid) -> str:
+    """Decoded `feedback:<X>` for a post-level base64 feedback id, else ""."""
+    if not isinstance(fid, str) or not fid:
+        return ""
+    try:
+        text = base64.b64decode(fid + "=" * (-len(fid) % 4), validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return ""
+    return text if POST_FEEDBACK_RE.match(text) else ""
+
+
+def story_node_feedback_id(data) -> str | None:
+    """`.data.node.feedback.id` of a CometFocusedStoryViewStoryQuery response.
+
+    Only that fixed path: the same response also carries each *comment's*
+    feedback (`…comments.edges[].node.feedback.id`, another pfbid), so a tree
+    walk could pick the wrong object.
+    """
+    node = ((data or {}).get("data") or {}).get("node") or {}
+    fid = (node.get("feedback") or {}).get("id")
+    return fid if decode_post_feedback_id(fid) else None
+
+
+def fetch_story_feedback_id(session, tokens, actor_id, story_id: str) -> str | None:
+    """Read a post's story and return its own feedback id (base64, verbatim).
+
+    None when the story cannot be read (not indexed yet, network, errors) —
+    callers fall back to the legacy `feedback:<post_id>`.
+    """
+    if not story_id:
+        return None
+    variables = {
+        "feedLocation": "DEDICATED_COMMENTING_SURFACE",
+        "feedbackSource": 110,
+        "focusCommentID": None,
+        "privacySelectorRenderLocation": "COMET_STREAM",
+        "referringStoryRenderLocation": "professional_dashboard",
+        "renderLocation": "professional_dashboard",
+        "scale": 2,
+        "useDefaultActor": False,
+        "storyID": story_id,
+        **STORY_VIEW_RELAY_PV_FLAGS,
+    }
+    try:
+        data = graphql_request(
+            session, tokens, actor_id, STORY_VIEW_DOC_ID,
+            "CometFocusedStoryViewStoryQuery", variables,
+        )
+    except (SystemExit, Exception):
+        return None
+    return story_node_feedback_id(data)
+
+
 # ── Content Library (published / scheduled posts) ────────────────────────────
 
 CONTENT_LIBRARY_PV_FLAGS = {

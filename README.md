@@ -166,12 +166,19 @@ retries while Facebook indexes the new row. If it still fails, the command says
 so and points at the manual two-step; the post itself is already scheduled at
 that point and is never re-posted.
 
-Or comment on any of your own posts later (numeric post_id printed by
-`fb post`, or the base64 story ID):
+Or comment on any of your own posts later. The target can be the numeric
+post_id printed by `fb post`, the base64 story ID, the post's `pfbid…` (from
+its URL), or the post's base64 feedback id (`ZmVlZGJhY2s6…`):
 
 ```bash
 uv run fb comment 1234567890123456 "https://example.com/article"
+uv run fb comment pfbid0AbC… "https://example.com/article"
 ```
+
+Every comment path reads the post's story first and comments on the feedback
+id Facebook reports there (since 2026-11 a `feedback:pfbid…`; Facebook rejects
+the old `feedback:<post_id>` with *Invalid value … feedback_id*). The old form
+is only a fallback when the story cannot be read, and the command says so.
 
 Post into a group you belong to — numeric id, `/groups/<id|vanity>/` URL, or
 the `/share/g/…` link the app gives you:
