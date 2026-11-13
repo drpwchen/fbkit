@@ -5,6 +5,16 @@ Originally forked from [htlin222/fbpost](https://github.com/htlin222/fbpost);
 maintained standalone since 2026-07-30 (upstream inactive since March 2026,
 PRs #1/#2 closed unmerged). MIT license and original copyright retained.
 
+## [0.12.3] - 2026-11-14
+
+### Docs
+
+- README is now a short front page (requirements and cost, setup, quick start, limitations). The full
+  command reference moved to `docs/commands.md`, and the profile layout, file map and how-it-works
+  notes to `docs/reference.md`; nothing was removed.
+- Added a support line, a Limitations section, a related-tools line and `SECURITY.md`.
+- No code changes (version strings bumped only).
+
 ## [0.12.2] - 2026-11-13
 
 ### Fixed

@@ -1,0 +1,328 @@
+# fbkit command reference
+
+Every command acts on a real, live Facebook account. Back to the [README](../README.md).
+
+## Post
+
+```bash
+uv run fb post "Hello world" --privacy FRIENDS
+uv run fb --profile fanpage post "Hello from page" --privacy EVERYONE
+```
+
+Options: `--privacy SELF|FRIENDS|EVERYONE|SUBSCRIBERS` (default: `SELF`)
+
+`SUBSCRIBERS` is the profile's subscriber-only audience (「訂閱者 / 僅限此個人
+檔案的訂閱者」), available on profiles with Facebook subscriptions turned on.
+Facebook does not model it as a privacy state: it is `base_state: SELF` plus a
+per-account subscriber list id, so the id is looked up from your own audience
+list at post time (matched on the stable `supporter_exclusive` icon, not on a
+localized label) and never hardcoded. If that option is missing from the
+account, the post is refused rather than sent to a wider audience. On the
+GraphQL path the audience is also read back off the created post and printed
+(`Audience confirmed by Facebook: 僅限訂閱者`); on the opt-in composer path
+(`--image --composer`) the picker's radio must actually flip and the composer
+must show the audience before anything is submitted.
+
+Note that a subscriber post can't be rehearsed with `--privacy SELF` — the
+audiences are different objects. Verify a real one from a logged-out browser
+(it should not render) or from a non-subscriber account.
+
+Schedule for later (pure GraphQL — no browser, no zh-TW selector dependency):
+
+```bash
+uv run fb post "Later post" --privacy EVERYONE --schedule "2026-07-18 11:00"
+```
+
+The schedule time must be at least 10 minutes out (Facebook's minimum) and is
+your machine's local time, sent as an absolute epoch — no account-timezone
+ambiguity. Photo posts take the same path: `--image` uploads to the composer's
+own upload endpoint and passes the returned photo id to the post mutation, so
+no browser is involved and a long post no longer spends minutes being typed
+character by character.
+
+If Facebook ever changes that endpoint, `--image --composer` forces the old
+browser path, where the schedule goes into the zh-TW UI: the time is typed and
+read back, the date is chosen from the calendar popup (writing into that field
+changes only what you see, not what Facebook stores), and both are re-checked
+against the Content Library afterwards. Facebook's own picker only allows
+roughly 30 days ahead — asking for a later date fails loudly instead of
+quietly publishing on the wrong day.
+
+Pre-write a comment on the new post in the same command — handy for the
+"link in comments" habit; it works on scheduled posts before they publish:
+
+```bash
+uv run fb post "Post text" --privacy EVERYONE \
+  --schedule "2026-07-18 11:00" --comment "https://example.com/article"
+```
+
+This works with `--image` as well, scheduled or immediate, because the photo
+path returns a post id directly. (With the `--composer` fallback the post must
+be scheduled, since the browser path returns no id — it is then read back from
+the Content Library preview before the comment is sent.)
+
+With `--schedule` the comment cannot go to the id the post mutation returns:
+while the post sits unpublished, Facebook answers that id with *"this post has
+been removed"*. So `--comment` looks the post up in the Content Library and
+comments on the id from there — the route `fb comment-scheduled` takes — and
+retries while Facebook indexes the new row. If it still fails, the command says
+so and points at the manual two-step; the post itself is already scheduled at
+that point and is never re-posted.
+
+Or comment on any of your own posts later. The target can be the numeric
+post_id printed by `fb post`, the base64 story ID, the post's `pfbid…` (from
+its URL), or the post's base64 feedback id (`ZmVlZGJhY2s6…`):
+
+```bash
+uv run fb comment 1234567890123456 "https://example.com/article"
+uv run fb comment pfbid0AbC… "https://example.com/article"
+```
+
+Every comment path reads the post's story first and comments on the feedback
+id Facebook reports there (since 2026-11 a `feedback:pfbid…`; Facebook rejects
+the old `feedback:<post_id>` with *Invalid value … feedback_id*). The old form
+is only a fallback when the story cannot be read, and the command says so.
+
+Post into a group you belong to — numeric id, `/groups/<id|vanity>/` URL, or
+the `/share/g/…` link the app gives you:
+
+```bash
+uv run fb post "Post text" --group https://www.facebook.com/share/g/XXXXXXXX/ \
+  --image cover.png
+```
+
+Group posts go out immediately: Facebook only lets group admins schedule, so
+`--schedule` is refused with `--group`, and `--privacy` does not apply (the
+group's own privacy does). A group that reviews member posts holds yours until
+an admin approves it.
+
+## Your posts — List / Comment / Delete
+
+Your own posts live in the Professional Dashboard's Content Library (**已發佈**
+and **已排定發佈** tabs); for a personal profile with no Page, Meta Business
+Suite is unavailable, so that library is the source of truth. These commands
+query it over GraphQL — a couple of seconds each, no browser.
+
+```bash
+uv run fb post-list-scheduled              # scheduled posts: index, time, audience, post_id, preview
+uv run fb post-list-scheduled --no-audience # skip the per-post audience lookup (1 extra request each)
+uv run fb post-list-published              # published posts: same, plus views / engagement
+uv run fb post-list-published --count 25 --days LAST_90D
+
+uv run fb comment-scheduled 2 "https://example.com/article"     # comment on a post that hasn't published yet
+uv run fb comment-scheduled 2 "text" --match "draft about cats" # abort if row 2 doesn't contain this text
+
+uv run fb post-delete-scheduled 2 --match "draft about cats"   # delete a scheduled post
+uv run fb post-delete --post-id 1234567890                     # delete a PUBLISHED post by id
+uv run fb post-delete 3 --match "draft about cats"             # ...or by index from post-list-published
+```
+
+`post-list-published` is the only reliable way to confirm a post really went
+out: scraping the profile page does not load the post wall for this kind of
+account, so a post made through the API had nothing to check against.
+
+Every destructive command resolves the index freshly, prints exactly what it is
+about to delete, aborts when the `--match` text is not in that row, and
+re-reads the library afterwards to confirm the post is gone before reporting
+success. `post-delete` additionally *requires* `--match` when you pass an
+index, because a published post cannot be restored — pass `--post-id` when you
+want to skip indexing.
+
+`comment-scheduled` fills the gap `fb comment` leaves: it looks the scheduled
+post's id up in the library and comments over the normal GraphQL path, so the
+comment is waiting under the post the moment it publishes.
+
+The listings and deletes take `--browser` to fall back to driving the dashboard
+UI, in case Facebook changes the Content Library query. That path is the old
+implementation, kept intact: `--no-headless` to watch a listing, `--headless`
+to hide the (headed by default) delete.
+
+## Content data report (post analytics export)
+
+Automates the Professional Dashboard export flow (匯出資料 → 建立資料報告 →
+poll 報告紀錄 → download) and saves the CSV — one row per post with views,
+reach, engagement, reactions, comments, saves, and shares:
+
+```bash
+uv run fb report                           # saves fb_report_YYYY-MM-DD.csv
+uv run fb report --out my_report.csv       # custom output path
+uv run fb report --timeout 360             # wait longer for report generation
+```
+
+**Revenue metrics are excluded by default, on purpose**: Facebook's export
+has a bug where any checked 收益 (revenue) metric silently drops every column
+after it from the CSV. If your profile is monetized and you accept a
+truncated export, opt back in with `--include-revenue`.
+
+Two gotchas the command already handles, worth knowing about:
+
+- The date range is the dashboard default (**past 28 days**) — keep your own
+  history if you need older data.
+- **Timestamps in the CSV are US Pacific time**, not your local timezone.
+  `scripts/report_to_md.py <report.csv>` converts them to Taipei (+15h) and
+  emits a markdown table; adapt the offset for your timezone.
+
+## Profile insights (views / followers / earnings)
+
+Reads the Professional Dashboard 洞察報告 through pure GraphQL — the same
+data the Insights tabs render, which the CSV export above does not cover:
+
+```bash
+uv run fb insights                         # 7-day + 28-day layers, all sections
+uv run fb insights --days 90               # 7-day + 90-day layers
+uv run fb insights --start 2026-06-01 --end 2026-08-01   # one explicit range
+uv run fb insights --section audience      # one section only
+uv run fb insights --daily                 # include the daily time series
+uv run fb insights --json insights.json    # full structured dump for analysis
+```
+
+What you get per section:
+
+- **views** — total views with period-over-period delta, daily views series,
+  follower vs non-follower split, split by content type, posts-published series
+- **audience** — follower total, new / lost / net for the range, the **daily
+  follower-count curve**, and demographics (age+gender, city, country, in %)
+- **earnings** — total USD with delta, daily series, breakdown by program
+  (e.g. subscriptions)
+- **subscriptions** — current subscriber count, gained / canceled within the
+  range, and the subscription program's earnings. The count comes from the
+  訂閱者名單 dialog's query, which is the authoritative number — the insights
+  card lags it, and the CLI notes the difference when they disagree
+
+Notes:
+
+- Read-only; works on a professional-mode personal profile (no Page needed).
+- Facebook buckets insight days in **US Pacific time**; the last (current) day
+  is a partial bucket, so ignore its dip in the series.
+- These queries are SSR-preloaded by the dashboard, so they never appear as
+  XHR in a network capture — the doc_ids came out of the page HTML's
+  `preloaderID`/`queryID` entries (see `scripts/fb_config.py`).
+
+## Subscribers & snapshots
+
+```bash
+uv run fb subscribers                      # the 訂閱者名單: name + months subscribed
+uv run fb subscribers --json subs.json
+uv run fb snapshot                         # dated snapshot + diff vs the previous one
+```
+
+`fb snapshot` writes `profiles/<profile>/snapshots/YYYY-MM-DD.json` (subscriber
+list + a 7-day and 28-day insights summary) and prints who joined/left since
+the last snapshot. Run it on a weekly schedule and you get the one dataset
+Facebook cannot give you retroactively: **membership history** — everything
+else (views/followers/earnings curves) can be re-queried for any past range
+with `fb insights`, so there is no need to hoard it. The snapshots directory
+is inside `profiles/` and therefore gitignored: subscriber names are other
+people's personal data and must never reach a public repo.
+
+## Comments
+
+```bash
+uv run fb comments                         # unreplied comments
+uv run fb comments --filter ALL            # include already-replied
+uv run fb comments --count 20             # fetch more per page
+uv run fb comments --next                  # next page
+uv run fb --profile fanpage comments      # fan page comments
+```
+
+Comments from yourself and link-only comments are automatically filtered out.
+
+## Reply
+
+```bash
+uv run fb reply 0 "Thanks!"                           # by index from last listing
+uv run fb reply Y29tbWV... "Thanks!"                   # by base64 comment ID
+uv run fb --profile fanpage reply 0 "Thanks!"          # reply as fan page
+```
+
+## Login (browser-based)
+
+```bash
+uv run fb login
+```
+
+Opens a headed browser for manual login. Cookies and storage state are saved automatically.
+
+## Messenger — Send
+
+```bash
+uv run fb send Alice "Hello!"              # by contact name (from cache)
+uv run fb send 1234567890123456 "Hello!"   # by thread ID
+uv run fb send Alice "Hello!" --headless   # hidden browser (less reliable for E2E)
+uv run fb send Alice "$(printf 'line 1\nline 2')" --file deck.pptx --file deck.pdf   # multi-line text + attachments
+```
+
+Newlines in the text become line breaks (Shift+Enter), not separate sends. `--file`
+is repeatable; each file must show up in the composer preview before anything is
+sent, and success means a new file link with that name appears in the thread
+(large E2EE uploads can take minutes).
+
+Send defaults to **headed mode** (visible browser) for reliable E2E encryption handling. The flow:
+1. Navigate to E2E thread
+2. Auto-enter PIN if needed
+3. Verify text is in input box
+4. Press Enter to send
+
+## Messenger — Inbox
+
+```bash
+uv run fb inbox
+uv run fb inbox --count 30 --no-headless
+```
+
+## Messenger — Read
+
+```bash
+uv run fb read Alice                       # by name
+uv run fb read 1234567890123456            # by thread ID
+uv run fb read Alice --count 50
+uv run fb read Alice --count 10 --save-attachments ./files   # also save pptx/pdf/… attachments (E2EE)
+```
+
+## Messenger — Search and Read
+
+```bash
+uv run fb search "Name"
+uv run fb search "Name" --count 30
+```
+
+Searches Messenger, opens the matching thread, reads messages, and caches the contact for future use.
+
+## Messenger — Chat History
+
+Scrolls through a thread to extract messages (handles Messenger's DOM virtualization):
+
+```bash
+uv run fb history Alice --days 30
+uv run fb history Alice --days 14 --output chat.json
+```
+
+Output: `profiles/<profile>/chat_history_<thread_id>.json`
+
+## Contacts
+
+```bash
+uv run fb contacts                         # list cached contacts
+uv run fb discover-e2ee --count 100        # scan sidebar for E2E contacts
+uv run fb verify-contacts --count 20       # classify as DM vs group
+```
+
+### Contact Discovery
+
+`discover-e2ee` scrolls the Messenger sidebar to find E2E encrypted conversations and caches them. After discovery, you can send messages by name instead of thread ID.
+
+### Contact Verification
+
+`verify-contacts` opens each cached E2E thread to check if it's a 1-on-1 (DM) or group conversation. Results are saved to the contacts cache with a `type` field.
+
+## Daemon Mode
+
+Keep a browser running for instant Messenger access (~6s per send):
+
+```bash
+# Terminal 1: start daemon
+uv run fb daemon
+
+# Terminal 2: send messages (auto-connects to daemon)
+uv run fb send Alice "Hello!" --headless
+```
