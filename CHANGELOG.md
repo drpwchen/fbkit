@@ -5,6 +5,17 @@ Originally forked from [htlin222/fbpost](https://github.com/htlin222/fbpost);
 maintained standalone since 2026-07-30 (upstream inactive since March 2026,
 PRs #1/#2 closed unmerged). MIT license and original copyright retained.
 
+## [0.12.2] - 2026-11-13
+
+### Fixed
+
+- **`fb read --save-attachments` could miss a large E2EE file** that had not
+  finished decrypting when the scan ran (a 50 MB pptx was skipped). The scan
+  now polls until no file link is still waiting for its blob and the set of
+  ready files is unchanged for 3 polls (2 s apart), up to 180 s; on timeout it
+  saves what is ready and warns how many are still pending. Not yet verified
+  live on a large file.
+
 ## [0.12.1] - 2026-11-13
 
 ### Fixed

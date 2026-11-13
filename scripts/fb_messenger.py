@@ -1279,6 +1279,58 @@ async def read_thread(
 
 _B64_CHUNK = 4 * 1024 * 1024  # base64 chars per evaluate round trip
 
+_SCAN_ATTACHMENTS_JS = """() => {
+    const main = document.querySelector('div[role="main"]');
+    if (!main) return {ready: [], pending: 0};
+    const ready = [], seen = new Set();
+    let pending = 0;
+    for (const a of main.querySelectorAll('a[download], a[href^="blob:"]')) {
+        const href = a.getAttribute('href') || '';
+        if (href.startsWith('blob:')) {
+            if (seen.has(a.href)) continue;
+            seen.add(a.href);
+            ready.push({href: a.href,
+                        name: a.getAttribute('download') || a.getAttribute('aria-label') || ''});
+        } else if (!href || href === '#') {
+            pending++;  // file bubble rendered, blob not decrypted yet
+        }  // https file links (non-E2EE) never become blobs
+    }
+    return {ready, pending};
+}"""
+
+
+async def _wait_for_attachments(page, interval_ms: int = 2000, settle: int = 3,
+                                timeout_s: float = 180):
+    """Return the blob attachments once decryption has settled.
+
+    A large E2EE file (50 MB pptx) is decrypted after the text bubbles, so a
+    single scan right after loading can miss it. Poll until no file link is
+    still waiting for its blob and the ready set has been unchanged for
+    `settle` consecutive polls, or until timeout_s.
+    """
+    deadline = time.monotonic() + timeout_s
+    prev_key, stable, scan = None, 0, {"ready": [], "pending": 0}
+    last_msg = None
+    while True:
+        scan = await page.evaluate(_SCAN_ATTACHMENTS_JS)
+        key = tuple(sorted(f["href"] for f in scan["ready"]))
+        stable = stable + 1 if key == prev_key else 0
+        prev_key = key
+        if scan["pending"] == 0 and stable >= settle - 1:
+            break
+        if time.monotonic() >= deadline:
+            print(f"  ⚠ Attachments still decrypting after {timeout_s:.0f}s: "
+                  f"{scan['pending']} pending — saving the {len(scan['ready'])} ready",
+                  file=sys.stderr)
+            break
+        msg = (f"  … waiting for {scan['pending']} attachment(s) to decrypt "
+               f"({len(scan['ready'])} ready)") if scan["pending"] else None
+        if msg and msg != last_msg:
+            print(msg)
+        last_msg = msg
+        await page.wait_for_timeout(interval_ms)
+    return scan["ready"]
+
 
 async def _save_attachments(page, save_dir: str):
     """Save file attachments currently loaded in the thread to save_dir.
@@ -1289,11 +1341,7 @@ async def _save_attachments(page, save_dir: str):
     Only messages loaded by --count are in the DOM, so older files need a
     larger --count. Non-E2EE (https) file links are not handled.
     """
-    files = await page.evaluate(
-        """() => [...document.querySelectorAll('div[role="main"] a[href^="blob:"]')]
-            .map(a => ({href: a.href,
-                        name: a.getAttribute('download') || a.getAttribute('aria-label') || ''}))"""
-    )
+    files = await _wait_for_attachments(page)
     os.makedirs(save_dir, exist_ok=True)
     print(f"  Attachments: {len(files)} found")
     for i, f in enumerate(files):
