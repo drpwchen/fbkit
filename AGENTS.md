@@ -46,6 +46,12 @@ sandbox.
   Pagination `id` must be the library page id returned by page one, not the
   `c_user`. The profile page (`/me`, `/<vanity>`) does not reliably load the
   wall — never scrape it to verify a post.
+- **The Scheduled tab is read with no date range** (since 2026-11 Facebook
+  applies `routeDateRange` to it, and a scheduled post is never inside "the
+  last N days": LAST_7D/28D/90D returned an empty table while posts were
+  scheduled). `fetch_content_library()` forces `None` for `SCHEDULED`; the
+  Drafts tab was not checked. Symptom to recognise: `No scheduled posts.`
+  while the dashboard shows some.
 - **Deferred GraphQL responses**: some queries stream the table as later
   newline-separated chunks (`is_final:false`). `graphql_chunks()` in
   `fb_session.py` collects all of them; a "200 but empty data" symptom means a
