@@ -785,12 +785,20 @@ def fetch_content_library(
 ) -> list[dict]:
     """List the account's own posts from the Content Library, newest first.
 
-    `filtering` picks the tab (PUBLISHED / SCHEDULED / DRAFT). This is the same
+    `filtering` picks the tab (PUBLISHED / SCHEDULED / DRAFT); `date_range` is
+    ignored for SCHEDULED (see below). This is the same
     data the dashboard's table shows, so it is also the only reliable way to
     confirm a post really was published — a profile page scrape does not load
     the post wall for this account.
     """
     from scripts.fb_config import CONTENT_LIBRARY_DOC_ID, CONTENT_LIBRARY_PAGE_DOC_ID
+
+    # Scheduled posts lie in the future, so no "last N days" window contains
+    # them. Since 2026-11 Facebook applies the date range to the Scheduled tab
+    # as well: with LAST_7D/28D/90D the table comes back empty although posts
+    # are scheduled; with no range it lists them (verified live 2026-11-22).
+    if filtering == "SCHEDULED":
+        date_range = None
 
     variables = {
         "isExportEnabled": True, "isMonetizationEnabled": True,

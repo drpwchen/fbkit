@@ -5,6 +5,18 @@ Originally forked from [htlin222/fbpost](https://github.com/htlin222/fbpost);
 maintained standalone since 2026-07-30 (upstream inactive since March 2026,
 PRs #1/#2 closed unmerged). MIT license and original copyright retained.
 
+## [0.12.4] - 2026-11-22
+
+### Fixed
+
+- **`fb post-list-scheduled` printed `No scheduled posts.` although posts were
+  scheduled.** Facebook now applies the Content Library date range to the
+  Scheduled tab too, and a scheduled post is never inside "the last 28 days".
+  The Scheduled tab is now read with no date range. This also repairs every
+  command that looks a scheduled post up in that list: `fb post … --comment`
+  on a scheduled post, `comment-scheduled` and `post-delete-scheduled`.
+  Verified live on one scheduled post; `post-list-published` is unchanged.
+
 ## [0.12.3] - 2026-11-14
 
 ### Docs
