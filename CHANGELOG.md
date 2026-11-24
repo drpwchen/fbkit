@@ -5,6 +5,31 @@ Originally forked from [htlin222/fbpost](https://github.com/htlin222/fbpost);
 maintained standalone since 2026-07-30 (upstream inactive since March 2026,
 PRs #1/#2 closed unmerged). MIT license and original copyright retained.
 
+## [0.13.0] - 2026-11-24
+
+### Added
+
+- **`fb post --video PATH`**: attach one video (`.mp4/.mov/.m4v/.webm`) to a
+  profile post, immediate or `--schedule`d, with `--comment` on either. The
+  upload is the web composer's own three-step path (start → byte upload →
+  receive, resumed from the offset Facebook reports), captured with the
+  submit aborted. The command only reports success once Facebook says the
+  video is processed (`OK`, or for a scheduled post a playable length); if it
+  is not within 5 minutes it exits non-zero and says the post exists.
+  Refused, because not tested: `--video` with `--image`, `--group` or
+  `--composer`.
+- Verified live with SELF posts of a 28 MB test video: immediate post with
+  comment (status `OK`, 30 s playable), scheduled post with comment
+  (`UNDISCOVERABLE`, 30 s playable; listed by `post-list-scheduled` with the
+  只限本人 audience). Release E2E (scheduled SELF photo post + comment, list,
+  delete with `--match`) re-run after the photo upload refactor.
+
+### Changed
+
+- The photo upload now shares the header stash/restore and response parsing
+  with the video upload (`_without_form_headers`, `_ajax_json`); behaviour is
+  the same.
+
 ## [0.12.4] - 2026-11-22
 
 ### Fixed

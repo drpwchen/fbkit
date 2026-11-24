@@ -32,6 +32,9 @@ from scripts.fb_session import (
     fetch_story_feedback_id,
     resolve_privacy_row,
     upload_photo,
+    upload_video,
+    video_mime,
+    wait_for_story_video,
     PLAIN_PRIVACY_STATES,
 )
 
@@ -332,7 +335,7 @@ def _story_id_for_post(session, tokens, actor_id, post_id: str) -> str:
 
 
 def _comment_on_scheduled(session, tokens, actor_id, comment, schedule_at,
-                          story_id="", text="", attempts=3):
+                          story_id="", text="", attempts=3, row_attempts=3):
     """Attach --comment to a post that is scheduled, not published.
 
     The id `ComposerStoryCreateMutation` returns is not commentable while the
@@ -347,6 +350,7 @@ def _comment_on_scheduled(session, tokens, actor_id, comment, schedule_at,
           "(its published id is not commentable yet)...")
     row = _find_scheduled_row(
         session, tokens, actor_id, story_id=story_id, text=text,
+        attempts=row_attempts,
     )
     if not row:
         print(
@@ -452,8 +456,38 @@ def _group_variables(text, actor_id, group_id, attachments) -> dict:
     }
 
 
+def video_flag_error(args) -> str | None:
+    """Why this --video combination is refused, or None when it is fine.
+
+    Only the timeline GraphQL path was captured and run live with a video;
+    the group mutation and the browser composer were not, so they are refused
+    instead of guessed. A video and photos in one post was not tried either.
+    """
+    video = getattr(args, "video", None)
+    if not video:
+        return None
+    if args.image:
+        return "--video cannot be combined with --image (one video per post)."
+    if args.group:
+        return "--video is not supported with --group (the group path was not captured with a video)."
+    if args.composer:
+        return "--video uses the API upload; --composer is for --image only."
+    if not os.path.isfile(video):
+        return f"video file not found: {video}"
+    if not video_mime(video):
+        return (
+            f"unsupported video type {os.path.splitext(video)[1]!r} "
+            "(known: .m4v, .mov, .mp4, .webm)."
+        )
+    return None
+
+
 def cmd_post(args):
     """Post text to Facebook."""
+    problem = video_flag_error(args)
+    if problem:
+        print(f"Error: {problem}", file=sys.stderr)
+        sys.exit(1)
     if args.group and (args.schedule or args.composer):
         print(
             "Error: --group posts immediately via GraphQL. Facebook lets only "
@@ -534,6 +568,14 @@ def cmd_post(args):
         for path in args.image:
             photo_id = upload_photo(session, tokens, actor_id, path)
             attachments.append({"photo": {"id": photo_id}})
+    elif getattr(args, "video", None):
+        print("\nUploading video...")
+        video_id = upload_video(session, tokens, actor_id, args.video)
+        # The composer sends more keys (thumbnail, transcriptions, …); this is
+        # the minimal set Facebook accepted in the live test. Processing goes
+        # on after the post exists — notify_when_processed is what the
+        # composer asks for too.
+        attachments.append({"video": {"id": video_id, "notify_when_processed": True}})
 
     session_id = str(uuid.uuid4())
     variables = {
@@ -661,12 +703,44 @@ def cmd_post(args):
         else:
             print(f"  Audience confirmed by Facebook: {stored['label']}")
 
+    if getattr(args, "video", None) and post_id:
+        # The post exists as soon as the mutation answers, but the video is
+        # still processing; "success" here means Facebook reports it playable
+        # (a scheduled post: processed, with a duration). This wait also
+        # covers the comment: a video post's story is not readable for longer
+        # than a photo post's (15 s was not enough, 2026-11-24).
+        story_id = story_create.get("story_id") or (story or {}).get("id") or ""
+        print("\nWaiting for Facebook to process the video...")
+        ready, status, duration_ms = wait_for_story_video(
+            session, tokens, actor_id, story_id, scheduled=bool(schedule_epoch),
+        )
+        if ready:
+            secs = f" ({duration_ms / 1000:.0f} s playable)" if duration_ms else ""
+            note = (" — status stays UNDISCOVERABLE until the post goes live"
+                    if schedule_epoch and status != "OK" else "")
+            print(f"  Video processed by Facebook: {status}{secs}{note}")
+        else:
+            print(
+                f"WARNING: the post exists (post_id {post_id}) but Facebook has "
+                f"not reported the video as processed (last status: "
+                f"{status or 'not readable'}). Check the post by hand — do NOT "
+                "re-post." + (
+                    f" The comment was not attempted; add it later with "
+                    f"'fb comment {post_id} \"text\"'." if args.comment else ""
+                ),
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
     if args.comment and post_id:
         print()
         if schedule_epoch:
             _comment_on_scheduled(
                 session, tokens, actor_id, args.comment, args.schedule,
                 story_id=story_create.get("story_id") or "", text=args.text,
+                # A scheduled video's row showed up in the Content Library
+                # later than the 3 x 4 s a photo post needs (2026-11-24).
+                row_attempts=12 if getattr(args, "video", None) else 3,
             )
         else:
             # Same indexing lag as the scheduled path: the post exists but is
@@ -1613,6 +1687,12 @@ def main():
         help="Path to an image to attach (uploaded via the API, then referenced "
              "by the post). Repeat the flag for a multi-photo post; the order "
              "you pass them in is the order Facebook shows them.",
+    )
+    post_parser.add_argument(
+        "--video", metavar="PATH",
+        help="Path to one video (.mp4/.mov/.m4v/.webm) to attach, uploaded the "
+             "way the web composer does it. Cannot be combined with --image, "
+             "--group or --composer.",
     )
     post_parser.add_argument(
         "--schedule",

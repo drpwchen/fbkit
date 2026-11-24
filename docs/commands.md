@@ -69,6 +69,37 @@ retries while Facebook indexes the new row. If it still fails, the command says
 so and points at the manual two-step; the post itself is already scheduled at
 that point and is never re-posted.
 
+### Video posts
+
+Attach one video with `--video` (`.mp4`, `.mov`, `.m4v`, `.webm`). Without
+`--schedule` the post goes out immediately; with it, it is scheduled like any
+other post. `--comment` works with both.
+
+```bash
+uv run fb post "Post text" --video clip.mp4 --privacy EVERYONE
+uv run fb post "Post text" --video clip.mp4 --privacy EVERYONE \
+  --schedule "2026-07-18 11:00" --comment "https://example.com/article"
+```
+
+The upload is the one the web composer does: a start request returns a video
+id, the file's bytes go to Facebook's upload host (resumed from the offset
+Facebook reports if a transfer is cut short), and a receive request confirms
+them. The post mutation then carries the video id, the same way a photo post
+carries a photo id. Nothing is visible on your profile until that mutation
+runs.
+
+A post with a video is not done when the mutation answers: Facebook keeps
+processing the video. `fb post` reads the post back until Facebook reports the
+video as processed (`OK` with a playable length; a scheduled post reads
+`UNDISCOVERABLE` until it goes live, so there the playable length is the
+proof), then adds the comment. If the video is not reported processed within
+5 minutes, the command exits non-zero, says the post exists, and tells you not
+to post again.
+
+`--video` cannot be combined with `--image`, `--group` or `--composer`; those
+paths were not tested with a video and are refused rather than guessed. One
+video per post.
+
 Or comment on any of your own posts later. The target can be the numeric
 post_id printed by `fb post`, the base64 story ID, the post's `pfbid…` (from
 its URL), or the post's base64 feedback id (`ZmVlZGJhY2s6…`):

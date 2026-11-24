@@ -98,6 +98,20 @@ sandbox.
   and are documented as such in README. In Content Library, "visible but not
   clickable" elements are covered by a transparent wrapper — use
   `_click_through()` (falls back to `el.click()` via evaluate).
+- **Video posts** (`fb post --video`, captured 2026-11-24 with the submit
+  aborted): `vupload-edge …/requests/start/` (form) → `rupload.facebook.com/
+  fb_video/<rand>-<start>-<end>` (raw bytes from `Offset` to EOF; auth is the
+  query string — without `fb_dtsg` etc. it answers `NotAuthorizedError`) →
+  `…/requests/receive/` with the returned handle `h`. Same
+  `ComposerStoryCreateMutation`, attachment `{"video": {"id", "notify_when_
+  processed": true}}`. Success = the story's `attachments[].styles.attachment.
+  media.video_status_type == "OK"`; a scheduled post reads `UNDISCOVERABLE`
+  until it publishes, so there `playable_duration_in_ms` is the proof
+  (`video_ready()`). A video post's story and its scheduled Content Library
+  row appear later than a photo post's — the comment step waits for the video
+  first, and the scheduled row lookup retries 12× (photo path unchanged, 3×).
+  Not captured/refused: `--video` with `--group`, `--composer`, `--image`.
+  Rehearse with any real mp4 (`ffmpeg -f lavfi -i testsrc2… -t 30`).
 - Multi-photo: `--image` is repeatable on the GraphQL path; `--composer` takes
   one image only. Nothing can read back a *scheduled* post's attachments — verify
   by upload log (one photoID per file) or in Content Library by eye.

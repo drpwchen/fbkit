@@ -76,7 +76,7 @@ post is a safe rehearsal; it prints the new post's id once Facebook confirms it.
 
 ## What this version is like to use
 
-**API first, browser only when there is no API.** Posting, photos, scheduling,
+**API first, browser only when there is no API.** Posting, photos, videos, scheduling,
 audiences, listing your own posts, deleting them, and commenting all go through
 Facebook's own GraphQL endpoints — seconds per command, no window opening.
 Playwright is still there for what genuinely needs a real browser (login,
@@ -111,7 +111,7 @@ The full reference, with every option and example, is in [docs/commands.md](docs
 
 | Area | Commands |
 |---|---|
-| Post | `fb post` (text, photos, scheduling, audiences, link-in-comments) |
+| Post | `fb post` (text, photos, a video, immediate or scheduled, audiences, link-in-comments) |
 | Your posts | list, comment on, and delete your own published or scheduled posts |
 | Reports | content data report (CSV), profile insights, subscriber snapshots |
 | Comments | `fb comments`, `fb reply` |
@@ -130,6 +130,8 @@ How profiles, files and the two engines (GraphQL and Playwright) work:
 - The browser-driven flows target the Traditional Chinese (zh-TW) Facebook UI (see Notes).
 - Cookies expire; re-export them (or run `fb login`) when Facebook logs the session out.
 - Published posts cannot be recovered after `post-delete`.
+- `--video` attaches one video to a profile post. It is not available for group posts, and it cannot
+  be mixed with photos in the same post.
 
 ## Related tools
 

@@ -5,7 +5,9 @@ import json
 import os
 import re
 import sys
+import time
 import uuid
+from contextlib import contextmanager
 
 import requests
 from dotenv import dotenv_values
@@ -686,6 +688,14 @@ def fetch_story_feedback_id(session, tokens, actor_id, story_id: str) -> str | N
     None when the story cannot be read (not indexed yet, network, errors) —
     callers fall back to the legacy `feedback:<post_id>`.
     """
+    return story_node_feedback_id(fetch_story(session, tokens, actor_id, story_id))
+
+
+def fetch_story(session, tokens, actor_id, story_id: str) -> dict | None:
+    """Read a post's story (CometFocusedStoryViewStoryQuery); None on failure.
+
+    A just-created post is not readable at once — callers that need it retry.
+    """
     if not story_id:
         return None
     variables = {
@@ -707,7 +717,55 @@ def fetch_story_feedback_id(session, tokens, actor_id, story_id: str) -> str | N
         )
     except (SystemExit, Exception):
         return None
-    return story_node_feedback_id(data)
+    return data
+
+
+def story_video_status(data) -> tuple[str | None, int | None]:
+    """(video_status_type, playable_duration_in_ms) of a story's video, if any.
+
+    Read from `.data.node.attachments[].styles.attachment.media` — the same
+    response comment targeting uses. A processed video reads `OK` with a
+    duration; (None, None) = no video attachment visible (yet).
+    """
+    node = ((data or {}).get("data") or {}).get("node") or {}
+    for att in node.get("attachments") or []:
+        media = (((att or {}).get("styles") or {}).get("attachment") or {}).get("media") or {}
+        if "video_status_type" in media:
+            return media.get("video_status_type"), media.get("playable_duration_in_ms")
+    return None, None
+
+
+def video_ready(status: str | None, duration_ms, scheduled: bool = False) -> bool:
+    """Has Facebook finished processing the post's video?
+
+    A published post reads `OK`. A scheduled one reads `UNDISCOVERABLE` until
+    it goes live (seen 2026-11-24), so there a playable duration is the proof.
+    """
+    if status == "OK":
+        return True
+    return bool(scheduled and status and duration_ms)
+
+
+def wait_for_story_video(session, tokens, actor_id, story_id: str,
+                         timeout: int = 300, interval: int = 10,
+                         scheduled: bool = False):
+    """Poll a new video post until video_ready() says its video is processed.
+
+    Returns (ready, status, duration_ms) as last seen. Every status change is
+    printed, so a stuck or rejected video is visible.
+    """
+    deadline = time.time() + timeout
+    last = (None, None)
+    while True:
+        status = story_video_status(fetch_story(session, tokens, actor_id, story_id))
+        if status != last:
+            print(f"  video status: {status[0] or 'not readable yet'}")
+            last = status
+        if video_ready(*status, scheduled=scheduled):
+            return (True, *status)
+        if time.time() + interval > deadline:
+            return (False, *last)
+        time.sleep(interval)
 
 
 # ── Content Library (published / scheduled posts) ────────────────────────────
@@ -909,6 +967,64 @@ _MIME_BY_EXT = {
     ".gif": "image/gif", ".webp": "image/webp",
 }
 
+_UPLOAD_HEADERS = {
+    "Referer": "https://www.facebook.com/",
+    "Origin": "https://www.facebook.com",
+}
+
+
+def _upload_params(tokens, actor_id) -> dict:
+    """Query string the composer's upload endpoints carry (auth lives here)."""
+    return {
+        "av": actor_id, "__aaid": "0", "__user": actor_id, "__a": "1",
+        "__comet_req": "15",
+        "fb_dtsg": tokens["fb_dtsg"],
+        "jazoest": tokens.get("jazoest", ""),
+        "lsd": tokens.get("lsd", ""),
+        "__spin_r": tokens.get("__rev", ""),
+        "__spin_b": tokens.get("__spin_b", "trunk"),
+        "__spin_t": tokens.get("__spin_t", ""),
+        "__crn": "comet.fbweb.CometPostCreateRoute",
+    }
+
+
+@contextmanager
+def _without_form_headers(session):
+    """Drop the GraphQL leftovers from the shared session for one request.
+
+    graphql_request() leaves Content-Type: application/x-www-form-urlencoded
+    (and X-FB-Friendly-Name) on the shared session. requests only generates a
+    multipart / raw-body Content-Type when nothing else sets one, so those
+    leftovers make Facebook misread an upload body and answer 400 — but only
+    when a GraphQL call ran first, which is exactly what the SUBSCRIBERS path
+    does. Pop them for the request, then restore.
+    """
+    stashed = {
+        key: session.headers.pop(key)
+        for key in ("Content-Type", "X-FB-Friendly-Name")
+        if key in session.headers
+    }
+    try:
+        yield
+    finally:
+        session.headers.update(stashed)
+
+
+def _ajax_json(resp, what: str) -> dict:
+    """Parse an /ajax-style response (anti-JSON prefix) or exit with a reason."""
+    body = resp.text
+    if body.startswith("for (;;);"):
+        body = body[len("for (;;);"):]
+    try:
+        return json.loads(body)
+    except ValueError:
+        print(
+            f"Error: {what} returned an unreadable response "
+            f"(status {resp.status_code}): {body[:200]}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
 
 def upload_photo(session, tokens, actor_id, image_path: str) -> str:
     """Upload one photo and return its photoID, for `attachments` on a post.
@@ -934,17 +1050,7 @@ def upload_photo(session, tokens, actor_id, image_path: str) -> str:
     with open(image_path, "rb") as fh:
         blob = fh.read()
 
-    params = {
-        "av": actor_id, "__aaid": "0", "__user": actor_id, "__a": "1",
-        "__comet_req": "15",
-        "fb_dtsg": tokens["fb_dtsg"],
-        "jazoest": tokens.get("jazoest", ""),
-        "lsd": tokens.get("lsd", ""),
-        "__spin_r": tokens.get("__rev", ""),
-        "__spin_b": tokens.get("__spin_b", "trunk"),
-        "__spin_t": tokens.get("__spin_t", ""),
-        "__crn": "comet.fbweb.CometPostCreateRoute",
-    }
+    params = _upload_params(tokens, actor_id)
     # Field names as the composer sends them; source=8 marks a composer photo.
     form = {
         "source": "8",
@@ -954,40 +1060,12 @@ def upload_photo(session, tokens, actor_id, image_path: str) -> str:
     }
     files = {"farr": (os.path.basename(image_path), blob, mime)}
 
-    # graphql_request() leaves Content-Type: application/x-www-form-urlencoded
-    # (and X-FB-Friendly-Name) on the shared session. requests only generates
-    # the multipart Content-Type with its boundary when nothing else sets one,
-    # so those leftovers make Facebook read this body as urlencoded and answer
-    # 400 — but only when a GraphQL call ran first, which is exactly what the
-    # SUBSCRIBERS path does. Drop them for this request, then restore.
-    stashed = {
-        key: session.headers.pop(key)
-        for key in ("Content-Type", "X-FB-Friendly-Name")
-        if key in session.headers
-    }
-    try:
+    with _without_form_headers(session):
         resp = session.post(
             PHOTO_UPLOAD_URL, params=params, data=form, files=files,
-            headers={
-                "Referer": "https://www.facebook.com/",
-                "Origin": "https://www.facebook.com",
-            },
-            timeout=300,
+            headers=_UPLOAD_HEADERS, timeout=300,
         )
-    finally:
-        session.headers.update(stashed)
-    body = resp.text
-    if body.startswith("for (;;);"):
-        body = body[len("for (;;);"):]
-    try:
-        data = json.loads(body)
-    except ValueError:
-        print(
-            f"Error: photo upload returned an unreadable response "
-            f"(status {resp.status_code}): {body[:200]}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    data = _ajax_json(resp, "photo upload")
 
     photo_id = (data.get("payload") or {}).get("photoID")
     if not photo_id:
@@ -998,6 +1076,184 @@ def upload_photo(session, tokens, actor_id, image_path: str) -> str:
     size_kb = len(blob) // 1024
     print(f"  photo uploaded: {os.path.basename(image_path)} ({size_kb} KB) -> {photo_id}")
     return photo_id
+
+
+# The composer's video upload, captured 2026-11-24 by hooking XHR in the page
+# (upload done, submit aborted — nothing was posted). Three steps:
+#   1. vupload …/start/   (form)  -> video_id, upload_session_id, offsets
+#   2. rupload fb_video/… (raw bytes from `Offset` to EOF) -> {"h": handle}
+#   3. vupload …/receive/ (form, the handle) -> next start_offset; == size: done
+# The browser sends the whole file in one rupload POST even though start/
+# answers end_offset = 1 MiB; receive/ then reports the full size. The loop
+# below resumes from whatever start_offset receive/ reports.
+VIDEO_START_URL = "https://vupload-edge.facebook.com/ajax/video/upload/requests/start/"
+VIDEO_RECEIVE_URL = "https://vupload-edge.facebook.com/ajax/video/upload/requests/receive/"
+VIDEO_RUPLOAD_URL = "https://rupload.facebook.com/fb_video/{name}"
+
+_VIDEO_MIME_BY_EXT = {
+    ".mp4": "video/mp4", ".m4v": "video/x-m4v", ".mov": "video/quicktime",
+    ".webm": "video/webm",
+}
+
+# A partial transfer is resumed, but each round must make progress; this caps
+# a server that keeps answering the same offset.
+_VIDEO_MAX_ROUNDS = 20
+
+
+def video_mime(path: str) -> str | None:
+    return _VIDEO_MIME_BY_EXT.get(os.path.splitext(path)[1].lower())
+
+
+def _video_form(tokens, actor_id, waterfall_id, **fields) -> dict:
+    form = {
+        "waterfall_id": waterfall_id,
+        "target_id": actor_id,
+        "source": "composer",
+        "composer_entry_point_ref": "timeline",
+        "supports_chunking": "true",
+        "__user": actor_id, "__a": "1", "__comet_req": "15",
+        "fb_dtsg": tokens["fb_dtsg"],
+        "jazoest": tokens.get("jazoest", ""),
+        "lsd": tokens.get("lsd", ""),
+    }
+    form.update({k: str(v) for k, v in fields.items()})
+    return form
+
+
+def _video_step(session, url, actor_id, waterfall_id, form, what) -> dict:
+    with _without_form_headers(session):
+        resp = session.post(
+            url, params={"av": actor_id, "__a": "1"}, data=form,
+            headers={**_UPLOAD_HEADERS, "X_FB_VIDEO_WATERFALL_ID": waterfall_id},
+            timeout=120,
+        )
+    data = _ajax_json(resp, what)
+    payload = data.get("payload")
+    if not isinstance(payload, dict):
+        reason = data.get("errorSummary") or data.get("errorDescription") or data.get("error") or "no payload"
+        print(f"Error: {what} failed — {reason}", file=sys.stderr)
+        sys.exit(1)
+    return payload
+
+
+def upload_video(session, tokens, actor_id, video_path: str) -> str:
+    """Upload one video and return its video id, for `attachments` on a post.
+
+    Like upload_photo: nothing is published until the id is used in a
+    mutation. Facebook keeps processing the video after the post is created
+    (`notify_when_processed`); the caller verifies the post itself.
+    """
+    if not os.path.isfile(video_path):
+        print(f"Error: video file not found: {video_path}", file=sys.stderr)
+        sys.exit(1)
+    ext = os.path.splitext(video_path)[1].lower()
+    mime = video_mime(video_path)
+    if not mime:
+        print(
+            f"Error: unsupported video type {ext!r} "
+            f"(known: {', '.join(sorted(_VIDEO_MIME_BY_EXT))}).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    size = os.path.getsize(video_path)
+    name = os.path.basename(video_path)
+    waterfall_id = str(uuid.uuid4())
+
+    start = _video_step(
+        session, VIDEO_START_URL, actor_id, waterfall_id,
+        _video_form(
+            tokens, actor_id, waterfall_id,
+            supports_file_api="true", file_size=size, file_extension=ext[1:],
+            partition_start_offset=0, partition_end_offset=size,
+            has_file_been_replaced="false",
+        ),
+        "video upload start",
+    )
+    video_id = str(start.get("video_id") or "")
+    session_id = str(start.get("upload_session_id") or "")
+    if not video_id or not session_id:
+        print(f"Error: video upload start returned no video id: {start}", file=sys.stderr)
+        sys.exit(1)
+
+    offset = int(start.get("start_offset", 0))
+    end_hint = int(start.get("end_offset", size))
+    if start.get("skip_upload"):
+        # Never observed; refuse rather than post a video we did not send.
+        print(
+            "Error: Facebook answered skip_upload for this video — not handled "
+            "(the upload path was captured without it).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    rounds = 0
+    with open(video_path, "rb") as fh:
+        while offset < size:
+            rounds += 1
+            if rounds > _VIDEO_MAX_ROUNDS:
+                print(
+                    f"Error: video upload stopped making progress at byte {offset} of {size}.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            fh.seek(offset)
+            print(f"  sending {name}: bytes {offset}-{size} of {size}...")
+            with _without_form_headers(session):
+                resp = session.post(
+                    VIDEO_RUPLOAD_URL.format(name=f"{uuid.uuid4().hex}-{offset}-{end_hint}"),
+                    params=_upload_params(tokens, actor_id),
+                    data=fh,
+                    headers={
+                        **_UPLOAD_HEADERS,
+                        "Content-Type": "application/octet-stream",
+                        "Content-Length": str(size - offset),
+                        "X-Entity-Name": name,
+                        "X-Entity-Type": mime,
+                        "X-Entity-Length": str(size),
+                        "X-Total-Asset-Size": str(size),
+                        "Offset": str(offset),
+                        "start_offset": str(offset),
+                        "end_offset": str(end_hint),
+                        "composer_session_id": waterfall_id,
+                        "id": session_id,
+                        "product_media_id": video_id,
+                    },
+                    timeout=(30, 1800),
+                )
+            handle = _ajax_json(resp, "video byte upload").get("h")
+            if not handle:
+                print(
+                    f"Error: video byte upload returned no handle "
+                    f"(status {resp.status_code}): {resp.text[:200]}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
+            received = _video_step(
+                session, VIDEO_RECEIVE_URL, actor_id, waterfall_id,
+                _video_form(
+                    tokens, actor_id, waterfall_id,
+                    video_id=video_id, supports_upload_service="true",
+                    partition_start_offset=0, partition_end_offset=size,
+                    start_offset=offset, end_offset=size,
+                    fbuploader_video_file_chunk=handle,
+                ),
+                "video upload receive",
+            )
+            new_offset = int(received.get("start_offset", offset))
+            if new_offset <= offset:
+                print(
+                    f"Error: Facebook did not accept the video bytes "
+                    f"(still at byte {offset} of {size}): {received}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            offset = new_offset
+            end_hint = int(received.get("end_offset", size))
+
+    print(f"  video uploaded: {name} ({size // (1024 * 1024)} MB) -> {video_id}")
+    return video_id
 
 
 # ── Profile insights (洞察報告) ──────────────────────────────────────────────
