@@ -23,6 +23,10 @@ PRs #1/#2 closed unmerged). MIT license and original copyright retained.
   (`UNDISCOVERABLE`, 30 s playable; listed by `post-list-scheduled` with the
   只限本人 audience). Release E2E (scheduled SELF photo post + comment, list,
   delete with `--match`) re-run after the photo upload refactor.
+- Not run live: the resume-from-offset loop (every live upload went in one
+  request), file types other than `.mp4`, files larger than 28 MB, and
+  `post-delete` on a video post. The attachment is a minimal subset of what
+  the composer sends (no custom thumbnail, no AI-content label).
 
 ### Changed
 

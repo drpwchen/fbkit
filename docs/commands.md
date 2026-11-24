@@ -100,6 +100,11 @@ to post again.
 paths were not tested with a video and are refused rather than guessed. One
 video per post.
 
+What was run live (2026-11-24): a 28 MB / 30 s `.mp4`, sent in a single
+upload request. The resume-from-offset loop and the other file types
+are covered by unit tests only. The post carries a minimal video attachment
+(no custom thumbnail, no AI-content label); Facebook picks the thumbnail.
+
 Or comment on any of your own posts later. The target can be the numeric
 post_id printed by `fb post`, the base64 story ID, the post's `pfbid…` (from
 its URL), or the post's base64 feedback id (`ZmVlZGJhY2s6…`):

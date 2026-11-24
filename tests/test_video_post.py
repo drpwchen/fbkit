@@ -93,6 +93,7 @@ class VideoStatusTests(unittest.TestCase):
         self.assertTrue(ready("UNDISCOVERABLE", 30000, scheduled=True))
         self.assertFalse(ready("UNDISCOVERABLE", None, scheduled=True))
         self.assertFalse(ready(None, None, scheduled=True))
+        self.assertFalse(ready("ERROR", 30000, scheduled=True))        # unseen status
 
     def test_wait_polls_until_ok(self):
         answers = iter([None, story_with_video("PROCESSING", None), story_with_video("OK", 5000)])

@@ -743,7 +743,9 @@ def video_ready(status: str | None, duration_ms, scheduled: bool = False) -> boo
     """
     if status == "OK":
         return True
-    return bool(scheduled and status and duration_ms)
+    # Only the value actually seen on a scheduled post counts; anything else
+    # (an error state, a status Facebook adds later) is not taken as ready.
+    return bool(scheduled and status == "UNDISCOVERABLE" and duration_ms)
 
 
 def wait_for_story_video(session, tokens, actor_id, story_id: str,
